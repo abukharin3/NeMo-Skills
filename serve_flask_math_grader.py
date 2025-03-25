@@ -23,7 +23,7 @@ def extract_and_check(pred_sentence: str,
                       extract_regex:str=None,
                       **kwargs):
     try:
-        pred_output = math_grader.extract_answer(pred_sentence, extract_from_boxed=extract_from_boxed, extract_regex=extract_regex)
+        pred_output = math_grader.extract_answer(pred_sentence)
         if isinstance(pred_output, str):
             pred_output = pred_output.replace("'''", r'\'\'\'')
             while pred_output.endswith('\\'):
