@@ -84,12 +84,25 @@ This logic is largely copied from the Hendrycks' MATH release (math_equivalence)
 import contextlib
 import re
 import signal
+from importlib.metadata import PackageNotFoundError, version
 from math import isclose
 from typing import Union
 
-from sympy import N, simplify
-from sympy.parsing.latex import parse_latex
-from sympy.parsing.sympy_parser import parse_expr
+
+def _check_antlr_version():
+    "Function for checking the antlr package version."
+    # Check antlr version
+    PACKAGE_NAME = 'antlr4-python3-runtime'
+    REQUIRED_VERSION = '4.11.0'
+
+    try:
+        installed_version = version(PACKAGE_NAME)
+        if installed_version != REQUIRED_VERSION:
+            raise RuntimeError(
+                f"Package {PACKAGE_NAME} version mismatch: {installed_version} (required: {REQUIRED_VERSION})"
+            )
+    except PackageNotFoundError:
+        raise RuntimeError(f"Package {PACKAGE_NAME} not found. Please install antlr4-python3-runtime==4.11.0.")
 
 
 def _fix_fracs(string):
@@ -240,32 +253,11 @@ def normalize_answer_string(expr: str) -> str:
         return None
 
     # Remove enclosing `\text{}`.
+
     expr = _remove_left_and_right(expr)
     expr = _process_and_or_inside_text(expr)
     expr = _remove_right_units(expr)
     expr = _fix_interval(expr)
-    
-    # Handle "and" and text separators in answers
-    expr = re.sub(r'\\text{\s*and\s*}', ',', expr)
-    expr = re.sub(r'\\text', '', expr)
-    
-    # Handle "x=" prefix in answers
-    expr = re.sub(r'^x\s*=\s*', '', expr)
-    
-    # Handle grade notation (e.g., 12^{th} grade -> 12)
-    expr = re.sub(r'(\d+)\^{\\mathrm{th}}', r'\1', expr)
-    expr = re.sub(r'(\d+)\^{th}', r'\1', expr)
-    expr = re.sub(r'(\d+)th', r'\1', expr)
-    expr = re.sub(r'\\text{\s*grade\s*}', '', expr)
-    expr = re.sub(r'grade', '', expr)
-    
-    # Handle backslash before negative sign and normalize spaces
-    expr = expr.replace("\\-", "-")
-    # Remove trailing backslashes and normalize spaces
-    while expr.endswith('\\'):
-        expr = expr[:-1]
-    expr = re.sub(r'\s+', ' ', expr).strip()  # Normalize multiple spaces to single space
-
     for surround_str in ["\\\\text", "\\\\mathrm", "\\\\mathcal", "\\\\textbf", "\\\\textit"]:
         expr = expr.replace(surround_str, "")
         pattern = f"^{surround_str}" + "\{(?P<text>.+?)\}$"
@@ -387,120 +379,21 @@ def math_equal(
     1. numerical equal: both can convert to float and are equal
     2. symbolic equal: both can convert to sympy expression and are equal
     """
-    
+
+    # Check that the right antlr version is installed.
+    _check_antlr_version()
+
+    from sympy.parsing.sympy_parser import parse_expr
+
     prediction = normalize(prediction)
     reference = normalize(reference)
-    
 
     # another round of normalization
     prediction = normalize_answer_string(prediction)
     reference = normalize_answer_string(reference)
-    
 
     if isinstance(prediction, str) and len(prediction) > 1000:  # handling weird corner-cases
         prediction = prediction[:1000]
-
-    # Handle plus-minus notation (±) by expanding into explicit lists
-    if isinstance(reference, str) and "\\pm" in reference:
-        # If reference is already a list/set, expand any \pm elements within it
-        if ((reference.startswith('{') or reference.startswith('\\{')) and 
-            (reference.endswith('}') or reference.endswith('\\}'))):
-            
-            # Extract elements from reference
-            ref_content = reference.replace('\\{', '{').replace('\\}', '}')
-            ref_elements = [elem.strip() for elem in ref_content[ref_content.find('{')+1:ref_content.rfind('}')].split(',')]
-            
-            # Process reference elements, expanding any \pm notation
-            expanded_ref_elements = []
-            for elem in ref_elements:
-                if "\\pm" in elem:
-                    pm_match = re.search(r'(.*?)\\pm(.*)', elem)
-                    if pm_match:
-                        before = pm_match.group(1).strip()
-                        after = pm_match.group(2).strip()
-                        expanded_ref_elements.append(f"{before}+{after}")
-                        expanded_ref_elements.append(f"{before}-{after}")
-                else:
-                    expanded_ref_elements.append(elem)
-            
-            # Create a new reference with expanded elements
-            reference = "{" + ", ".join(expanded_ref_elements) + "}"
-        
-        # If reference is a single expression with \pm, convert to a list with both versions
-        else:
-            pm_match = re.search(r'(.*?)\\pm(.*)', reference)
-            if pm_match:
-                before_pm = pm_match.group(1).strip()
-                after_pm = pm_match.group(2).strip()
-                
-                # Create the plus and minus versions
-                plus_version = f"{before_pm}+{after_pm}"
-                minus_version = f"{before_pm}-{after_pm}"
-                
-                # Replace the reference with a list containing both versions
-                reference = "{" + plus_version + ", " + minus_version + "}"
-    
-    # Similarly handle \pm in prediction
-    if isinstance(prediction, str) and "\\pm" in prediction:
-        # If prediction is already a list/set, expand any \pm elements within it
-        if ((prediction.startswith('{') or prediction.startswith('\\{')) and 
-            (prediction.endswith('}') or prediction.endswith('\\}'))):
-            
-            # Extract elements from prediction
-            pred_content = prediction.replace('\\{', '{').replace('\\}', '}')
-            pred_elements = [elem.strip() for elem in pred_content[pred_content.find('{')+1:pred_content.rfind('}')].split(',')]
-            
-            # Process prediction elements, expanding any \pm notation
-            expanded_pred_elements = []
-            for elem in pred_elements:
-                if "\\pm" in elem:
-                    pm_match = re.search(r'(.*?)\\pm(.*)', elem)
-                    if pm_match:
-                        before = pm_match.group(1).strip()
-                        after = pm_match.group(2).strip()
-                        expanded_pred_elements.append(f"{before}+{after}")
-                        expanded_pred_elements.append(f"{before}-{after}")
-                else:
-                    expanded_pred_elements.append(elem)
-            
-            # Create a new prediction with expanded elements
-            prediction = "{" + ", ".join(expanded_pred_elements) + "}"
-        
-        # If prediction is a single expression with \pm, convert to a list with both versions
-        else:
-            pm_match = re.search(r'(.*?)\\pm(.*)', prediction)
-            if pm_match:
-                before_pm = pm_match.group(1).strip()
-                after_pm = pm_match.group(2).strip()
-                
-                # Create the plus and minus versions
-                plus_version = f"{before_pm}+{after_pm}"
-                minus_version = f"{before_pm}-{after_pm}"
-                
-                # Replace the prediction with a list containing both versions
-                prediction = "{" + plus_version + ", " + minus_version + "}"
-
-    # Handle case where prediction is a list but reference is a single value
-    # In this case, compare only the last element of the prediction
-    # if isinstance(prediction, str) and "," in prediction and "," not in str(reference):
-    #     pred_parts = [item.strip() for item in prediction.split(",")]
-    #     # Take the last element of the prediction
-    #     prediction = pred_parts[-1]
-
-    # For comma-separated lists, compare sorted lists
-    if isinstance(prediction, str) and isinstance(reference, str) and "," in prediction and "," in reference:
-        # Extract elements, ignoring brackets
-        pred_items = [item.strip() for item in prediction.replace("{", "").replace("}", "").replace("\\", "").split(',')]
-        ref_items = [item.strip() for item in reference.replace("{", "").replace("}", "").replace("\\", "").split(',')]
-        
-        # Sort both lists to handle different orders
-        pred_items_sorted = sorted(pred_items)
-        ref_items_sorted = sorted(ref_items)
-        
-        # Try direct string comparison of sorted lists
-        if pred_items_sorted == ref_items_sorted:
-            return True
-        
 
     # 0. string comparison
     if isinstance(prediction, str) and isinstance(reference, str):
@@ -556,8 +449,6 @@ def math_equal(
         and reference
         and prediction[0] in "(["
         and prediction[-1] in ")]"
-        and reference[0] in "(["
-        and reference[-1] in ")]"
         and prediction[0] == reference[0]
         and prediction[-1] == reference[-1]
     ):
@@ -572,6 +463,21 @@ def math_equal(
             ):
                 return True
 
+    if "," in prediction and "," in reference:
+        pred_parts = [item.strip() for item in prediction.split(",")]
+        ref_parts = [item.strip() for item in reference.split(",")]
+
+        if len(pred_parts) == len(ref_parts):
+            if all(
+                [
+                    math_equal(pred_parts[i], ref_parts[i], include_percentage, tolerance)
+                    for i in range(len(pred_parts))
+                ]
+            ):
+                return True
+            else:
+                return False
+
     # if we have point == tuple of values
     if prediction.startswith("Point") and reference[0] == "(" and reference[-1] == ")":
         pred_parts = prediction[prediction.find("(") + 1 : -1].split(",")
@@ -584,45 +490,6 @@ def math_equal(
                 ]
             ):
                 return True
-
-    # Handle matrix/vector comparisons better
-    if (("\\begin{pmatrix}" in reference or "\\begin{bmatrix}" in reference) and 
-        ("\\begin{pmatrix}" in prediction or "\\begin{bmatrix}" in prediction)):
-        # Extract matrix elements
-        ref_pattern = r"\\begin\{[pb]matrix\}(.*?)\\end\{[pb]matrix\}"
-        pred_pattern = r"\\begin\{[pb]matrix\}(.*?)\\end\{[pb]matrix\}"
-        
-        ref_match = re.search(ref_pattern, reference, re.DOTALL)
-        pred_match = re.search(pred_pattern, prediction, re.DOTALL)
-        
-        if ref_match and pred_match:
-            ref_content = ref_match.group(1).strip()
-            pred_content = pred_match.group(1).strip()
-            
-            # Split by rows and columns
-            ref_rows = [row.strip() for row in ref_content.split("\\\\")]
-            pred_rows = [row.strip() for row in pred_content.split("\\\\")]
-            
-            if len(ref_rows) == len(pred_rows):
-                all_equal = True
-                for i in range(len(ref_rows)):
-                    ref_cols = [col.strip() for col in ref_rows[i].split("&")]
-                    pred_cols = [col.strip() for col in pred_rows[i].split("&")]
-                    
-                    if len(ref_cols) != len(pred_cols):
-                        all_equal = False
-                        break
-                    
-                    for j in range(len(ref_cols)):
-                        if not math_equal(ref_cols[j], pred_cols[j], include_percentage, tolerance):
-                            all_equal = False
-                            break
-                    
-                    if not all_equal:
-                        break
-                
-                if all_equal:
-                    return True
 
     # if reference is a matrix
     if reference.startswith("\\begin{pmatrix}") and prediction.startswith("Matrix"):
@@ -644,6 +511,10 @@ def math_equal(
 
 
 def symbolic_equal(a, b, tolerance, timeout=10.0):
+    import sympy
+    from sympy.parsing.latex import parse_latex
+    from sympy.parsing.sympy_parser import parse_expr
+
     def _parse(s):
         for f in [parse_expr, parse_latex]:
             try:
@@ -658,62 +529,31 @@ def symbolic_equal(a, b, tolerance, timeout=10.0):
 
     try:
         with time_limit(timeout):
-            if simplify(a - b) == 0:
+            if sympy.simplify(a - b) == 0:
                 return True
     except Exception:
         pass
 
     try:
         with time_limit(timeout):
-            if isclose(N(a), N(b), rel_tol=tolerance):
+            if isclose(sympy.N(a), sympy.N(b), rel_tol=tolerance):
                 return True
     except Exception:
         pass
     return False
 
 
-def extract_answer(string):
-    """Extract Answer String from \\boxed expression."""
-    # Handle multiple boxed answers
-    boxed_answers = []
-    
-    # Find all occurrences of \boxed{...} or \fbox{...}
-    start_idx = 0
-    while start_idx < len(string):
-        idx = string.find("\\boxed", start_idx)
-        if idx < 0:
-            idx = string.find("\\fbox", start_idx)
-            if idx < 0:
-                break
-        
-        i = idx
-        right_brace_idx = None
-        num_left_braces_open = 0
-        while i < len(string):
-            if string[i] == "{":
-                num_left_braces_open += 1
-            if string[i] == "}":
-                num_left_braces_open -= 1
-                if num_left_braces_open == 0:
-                    right_brace_idx = i
-                    break
-            i += 1
-        
-        if right_brace_idx is not None:
-            boxed_content = string[idx:right_brace_idx + 1]
-            left = "\\boxed{"
-            if boxed_content.startswith(left) and boxed_content.endswith("}"):
-                boxed_answers.append(boxed_content[len(left):-1])
-            
-        start_idx = i + 1 if right_brace_idx is not None else len(string)
-    
-    # If we found multiple boxed answers, join them with commas
-    if len(boxed_answers) > 1:
-        return ", ".join(boxed_answers)
-    elif len(boxed_answers) == 1:
-        return boxed_answers[0]
-    
-    # Original single boxed answer extraction logic as fallback
+def extract_answer(string: str, extract_from_boxed: bool = True, extract_regex: str = r"The final answer is (.+)$"):
+    """Extract Answer String from \\boxed expression or based on regex"""
+    if not extract_from_boxed:
+        match = re.search(extract_regex, string)
+        if match:
+            return match.group(1)
+        return None
+
+    if "\\boxed" not in string:
+        return None
+
     idx = string.rfind("\\boxed")
     if idx < 0:
         idx = string.rfind("\\fbox")
