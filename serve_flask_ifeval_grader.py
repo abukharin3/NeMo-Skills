@@ -98,6 +98,7 @@ def math_grader():
                 prompt = prompts[i]
                 args_i = args[i]
                 response = responses[i]
+                response = response.split("</think>")[-1]
                 # Validate inputs
                 try:
                     task_args = args_i

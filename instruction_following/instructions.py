@@ -24,7 +24,7 @@ from typing import Dict, Optional, Sequence, Union
 import langdetect
 from absl import logging
 
-from nemo_aligner.utils.verifiers.instruction_following import instructions_util
+from . import instructions_util
 
 _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
 
